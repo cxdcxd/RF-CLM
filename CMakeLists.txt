@@ -20,7 +20,7 @@ find_package(catkin REQUIRED COMPONENTS
 find_package(Boost COMPONENTS system thread date_time REQUIRED)
 find_package(PkgConfig REQUIRED)
 find_package(PCL 1.2 REQUIRED)
-find_package(OpenCV 2.2 REQUIRED)
+find_package(OpenCV 2 REQUIRED)
 find_package(PkgConfig REQUIRED)
 FIND_PACKAGE(VTK REQUIRED)
 
@@ -31,24 +31,24 @@ catkin_package(
       CATKIN_DEPENDS message_runtime
 )
 
-include_directories(include
-
+include_directories(
+  include
   ${catkin_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
   ${Boost_INCLUDE_DIRS}
 )
 
 INCLUDE(${VTK_USE_FILE})
-include_directories(include ${catkin_INCLUDE_DIRS} ${EIGEN_INCLUDE_DIRS} ${SERIAL_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS})
+include_directories(include ${catkin_INCLUDE_DIRS} ${EIGEN_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS})
 link_directories(${Boost_LIBRARY_DIRS})
-link_directories(${OpenCV_LIBRARY_DIRS})
 
-include_directories(${PCL_INCLUDE_DIRS} )
+include_directories(${PCL_INCLUDE_DIRS})
 link_directories(${PCL_LIBRARY_DIRS})
+link_directories(${OpenCV_LIBRARY_DIRS})
 add_definitions(${PCL_DEFINITIONS})
 
 add_executable(tms_node src/tracker2.cpp)
-target_link_libraries(tms_node  ${catkin_LIBRARIES} ${Boost_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS} ${OpenCV_LIBRARIES} ${VTK_LIBRARIES} )
+target_link_libraries(tms_node ${catkin_LIBRARIES} ${Boost_LIBRARIES} ${PCL_LIBRARIES}  ${OpenCV_LIBRARIES} ${VTK_LIBRARIES} )
 
 
 
