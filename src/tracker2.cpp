@@ -117,14 +117,9 @@
 #include <pcl/recognition/cg/geometric_consistency.h>
 
 //PCL/SURFACE
-#include <pcl/surface/vtk_smoothing/vtk.h>
-#include <pcl/surface/vtk_smoothing/vtk_mesh_smoothing_laplacian.h>
-#include <pcl/surface/vtk_smoothing/vtk_mesh_smoothing_windowed_sinc.h>
-#include <pcl/surface/vtk_smoothing/vtk_mesh_subdivision.h>
-#include <pcl/surface/vtk_smoothing/vtk_utils.h>
 #include <pcl/surface/gp3.h>
 #include <pcl/surface/convex_hull.h>
-#include <pcl/surface/vtk_smoothing/vtk_utils.h>
+
 
 //PCL/FILTERS
 #include <pcl/filters/passthrough.h>
@@ -143,7 +138,6 @@
 #include <cstdlib>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
 #include <iostream>
 #include <fstream>
@@ -151,6 +145,9 @@
 #include <dirent.h>
 #include <limits>
 #include <vector>
+#include <string>
+#include <vector>
+
 
 //PCL/IO
 #include <pcl/io/pcd_io.h>
@@ -160,22 +157,31 @@
 #include <pcl/io/openni_grabber.h>
 #include <pcl/io/io.h>
 
-//VTK
-#include <vtkSmartPointer.h>
-#include <vtkSmoothPolyDataFilter.h>
 
 //BOOST
 #include <boost/lexical_cast.hpp>
 
 //OPENCV
 #include <cv_bridge/cv_bridge.h>
-
+#include <opencv2/videoio/videoio.hpp>
+#include <opencv2/videoio/videoio_c.h>
+#include <opencv2/imgproc.hpp>
+#include <opencv2/highgui/highgui.hpp>
 #include <opencv2/opencv.hpp>
 #include <opencv2/highgui/highgui.hpp>
-
+#include <sensor_msgs/Image.h>
+#include <image_transport/image_transport.h>
+#include <sensor_msgs/image_encodings.h>
 
 //EIGEN
 #include <Eigen/Core>
+
+//MoveIt
+#include <moveit/planning_scene_interface/planning_scene_interface.h>
+#include <ros/ros.h>
+#include <moveit/move_group_interface/move_group.h>
+#include "std_msgs/String.h"
+#include <moveit_msgs/DisplayTrajectory.h>
 
 //Global
 bool is_new_stream_ready = false;
@@ -190,6 +196,7 @@ float z_limit = 1.5; //meter
 int particles = 600;
 image_transport::Publisher pub_image;
 ros::Publisher pub_cloud;
+ros::Publisher pub_info;
 pcl::PolygonMesh::Ptr mri_mesh(new pcl::PolygonMesh());
 pcl::PolygonMesh::Ptr ground_truth_mesh(new pcl::PolygonMesh());
 
@@ -248,6 +255,9 @@ int benchmark_max_people_count = 17;
 int benchmark_person_index = 0;
 std::string benchmark_base_path = "/home/edwin/hpdb/";
 
+//moveit::planning_interface::MoveGroup group("arm_t");
+//moveit::planning_interface::PlanningSceneInterface planning_scene_interface;
+
 enum TrackingModes
 {
     PF,
@@ -264,6 +274,16 @@ void save_log(float rot_error,float dis_error,float roll,float pitch,float yaw,f
     outfile.open(save_log_path.c_str(), std::ios_base::app);
     outfile << person << " " << frame << " " << roll << " " << pitch << " " << yaw << " " << rot_error << " " << dis_error << " " <<  fps << endl;
     outfile.close();
+}
+
+void printMatix4f(const Eigen::Matrix4f & matrix)
+{
+    printf ("Rotation matrix :\n");
+    printf ("    | %6.3f %6.3f %6.3f | \n", matrix (0,0), matrix (0,1), matrix (0,2));
+    printf ("R = | %6.3f %6.3f %6.3f | \n", matrix (1,0), matrix (1,1), matrix (1,2));
+    printf ("    | %6.3f %6.3f %6.3f | \n", matrix (2,0), matrix (2,1), matrix (2,2));
+    printf ("Translation vector :\n");
+    printf ("T = < %6.3f, %6.3f, %6.3f >\n\n", matrix (0,3), matrix (1,3), matrix (2,3));
 }
 
 void wait(int ms)
@@ -285,7 +305,6 @@ bool drawParticles (pcl::visualization::PCLVisualizer& viz)
         //Set pointCloud with particle's points
         pcl::PointCloud<pcl::PointXYZ>::Ptr particle_cloud (new pcl::PointCloud<pcl::PointXYZ> ());
 
-
         for (size_t i = 0; i < particles->points.size (); i++)
         {
             pcl::PointXYZ point;
@@ -295,14 +314,13 @@ bool drawParticles (pcl::visualization::PCLVisualizer& viz)
             particle_cloud->points.push_back (point);
         }
 
-
         if ( is_show_particle )
         {
             pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> red_color (particle_cloud, 255, 0, 0);
             viz.setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 4, "particle_cloud");
 
             if (!viz.updatePointCloud (particle_cloud, red_color, "particle_cloud"))
-                viz.addPointCloud (particle_cloud, red_color, "particle_cloud");
+                 viz.addPointCloud (particle_cloud, red_color, "particle_cloud");
         }
 
         //OK
@@ -323,128 +341,6 @@ bool drawParticles (pcl::visualization::PCLVisualizer& viz)
     //No Particle
     return false;
 }
-
-//Draw model reference point cloud
-void drawResult (pcl::visualization::PCLVisualizer& viz)
-{
-
-    if ( is_first_align )
-    {
-        is_first_align = false;
-
-        //PF
-        ParticleT result = main_tracker->getResult ();
-        transformation = main_tracker->toEigenMatrix (result);
-
-        result_cloud.reset(new PointCloudTC);
-        pcl::transformPointCloud<PointTC> (*(main_tracker->getReferenceCloud ()), *result_cloud, transformation);
-
-    }
-    else
-    {
-
-        if ( tracking_mode == RANSAC )
-        {
-
-        }
-
-        if ( tracking_mode == PF )
-        {
-            //PF
-            ParticleT result = main_tracker->getResult ();
-            transformation = main_tracker->toEigenMatrix (result);
-
-            result_cloud.reset(new PointCloudTC);
-            pcl::transformPointCloud<PointTC> (*mri_cloud, *result_cloud, transformation);
-
-            result_Matrix_PF = transformation.matrix();
-            result_Matrix_PF(3,3) = 1;
-            result_Matrix_PF(3,0) = 0;
-            result_Matrix_PF(3,1) = 0;
-            result_Matrix_PF(3,2) = 0;
-
-            result_Matrix = result_Matrix_PF;
-        }
-
-        if ( tracking_mode == PFICP )
-        {
-            //PFICP
-
-            //PF
-            ParticleT result = main_tracker->getResult ();
-            transformation = main_tracker->toEigenMatrix (result);
-
-            result_cloud.reset(new PointCloudTC);
-            pcl::transformPointCloud<PointTC> (*mri_cloud, *result_cloud, transformation);
-
-            result_Matrix_PF = transformation.matrix();
-            result_Matrix_PF(3,3) = 1;
-            result_Matrix_PF(3,0) = 0;
-            result_Matrix_PF(3,1) = 0;
-            result_Matrix_PF(3,2) = 0;
-
-            //ICP
-            pcl::IterativeClosestPoint<PointTC, PointTC> icp;
-            icp.setInputSource(result_cloud);
-            icp.setInputTarget(stream_pre2_cloud);
-            icp.setMaximumIterations(20);
-            icp.align(*result_cloud);
-            result_Matrix_ICP = icp.getFinalTransformation().cast<float>();
-
-            result_Matrix = result_Matrix_PF * result_Matrix_ICP;
-        }
-
-
-
-    }
-
-    if ( is_show_result )
-    {
-        pcl::visualization::PointCloudColorHandlerCustom<PointTC> blue_color (result_cloud, 0, 200, 0);
-        viz.setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, "resultcloud");
-        if (!viz.updatePointCloud ( result_cloud, blue_color, "resultcloud"))
-            viz.addPointCloud ( result_cloud, blue_color, "resultcloud");
-    }
-
-    //Compute Benchmark Error
-    //========================================================
-    float roll , pitch , yaw;
-    float rollg , pitchg , yawg;
-
-    float x,y,z;
-    float xg,yg,zg;
-
-    transformation = result_Matrix;
-    pcl::getEulerAngles(transformation,roll,pitch,yaw);
-    roll  = roll  * 57.2957795;   //degree
-    pitch = pitch * 57.2957795;    //degree
-    yaw   = yaw   * 57.2957795;    //degree
-
-    transformationg = ground_truth_tf;
-    pcl::getEulerAngles(transformationg,rollg,pitchg,yawg);
-    rollg  = rollg  * 57.2957795; //degree
-    pitchg = pitchg * 57.2957795;  //degree
-    yawg   = yawg   * 57.2957795;  //degree
-
-    x = result_Matrix(0,3);
-    y = result_Matrix(1,3);
-    z = result_Matrix(2,3);
-
-    xg = ground_truth_tf(0,3);
-    yg = ground_truth_tf(1,3);
-    zg = ground_truth_tf(2,3);
-
-    float rot_error = sqrt((roll-rollg)*(roll-rollg) + (pitch-pitchg)*(pitch-pitchg) + (yaw-yawg)*(yaw-yawg));
-    float dist_error = sqrt((x-xg)*(x-xg) + (y-yg)*(y-yg) + (z-zg)*(z-zg));
-
-    //Our Method
-    //ROS_INFO_STREAM("TMS Tracking TPY : " << roll  << " , " << pitch  << " , " << yaw );
-    //Ground Truth
-    //ROS_INFO_STREAM("GTD Tracking TPY : " << rollg << " , " << pitchg << " , " << yawg );
-    //Errors
-    ROS_INFO_STREAM("Rotation Error (deg) : " << rot_error << " , Distace Error (cm) : " << dist_error * 100);
-}
-
 
 void show (pcl::visualization::PCLVisualizer& viz)
 {
@@ -502,26 +398,21 @@ void show (pcl::visualization::PCLVisualizer& viz)
                 viz.addPointCloud (ground_truth_cloud, ground_truth_color ,"ground_truth_cloud");
         }
 
+        if ( is_show_result )
+        {
+            pcl::visualization::PointCloudColorHandlerCustom<PointTC> blue_color (result_cloud, 0, 0, 255);
+            viz.setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, "resultcloud");
+            if (!viz.updatePointCloud ( result_cloud, blue_color, "resultcloud"))
+                 viz.addPointCloud ( result_cloud, blue_color, "resultcloud");
+        }
 
-        bool ret = drawParticles (viz);
-        if (ret)
-           drawResult (viz);
+       drawParticles (viz);
 
     }
     else
     {
         wait(1);
     }
-}
-
-void printMatix4f(const Eigen::Matrix4f & matrix)
-{
-    printf ("Rotation matrix :\n");
-    printf ("    | %6.3f %6.3f %6.3f | \n", matrix (0,0), matrix (0,1), matrix (0,2));
-    printf ("R = | %6.3f %6.3f %6.3f | \n", matrix (1,0), matrix (1,1), matrix (1,2));
-    printf ("    | %6.3f %6.3f %6.3f | \n", matrix (2,0), matrix (2,1), matrix (2,2));
-    printf ("Translation vector :\n");
-    printf ("T = < %6.3f, %6.3f, %6.3f >\n\n", matrix (0,3), matrix (1,3), matrix (2,3));
 }
 
 void getFeatures(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud, pcl::PointCloud<pcl::FPFHSignature33>::Ptr fpfhs)
@@ -848,7 +739,6 @@ void benchmarkLogic()
         else
             name_template +=  boost::lexical_cast<std::string>(benchmark_person_index + 1) + ".ply";
 
-
         ground_truth_cloud_temp.reset(new PointCloudTC);
 
         //Load the cloud as temp (we gone rotate it with gt transform later)
@@ -901,15 +791,17 @@ void benchmarkLogic()
 
             //ROS_INFO("Transform ground truth");
 
-            //Transform
+            //Transfor
+
             pcl::transformPointCloud<PointTC> (*ground_truth_cloud_temp, *ground_truth_cloud, ground_truth_tf);
-            
+
+            pcl::transformPointCloud<PointTC> (*ground_truth_cloud_temp, *result_cloud, result_Matrix);
+
             sensor_msgs::PointCloud2 msgc;
             pcl::toROSMsg(*stream_cloud,msgc);
 
             msgc.header.frame_id = "camera_link";
             msgc.header.stamp = ros::Time();
-
 
             pub_cloud.publish(msgc);
             //ROS_INFO("TF done");
@@ -919,13 +811,19 @@ void benchmarkLogic()
 
             //ROS_INFO("Preprocess Done");
             //Publish Image
-            sensor_msgs::ImagePtr msg = cv_bridge::CvImage(std_msgs::Header(), "bgr8", image).toImageMsg();
+            sensor_msgs::CameraInfo info;
+            info.header.stamp = ros::Time::now();
+
+            pub_info.publish(info);
+
+            sensor_msgs::ImagePtr msg = cv_bridge::CvImage(info.header, "bgr8", image).toImageMsg();
             pub_image.publish(msg);
 
-            cv::imshow( "RGB", image );                      // Show our image inside it.
-            cv::waitKey(1);                                  // Wait for a keystroke in the window
+            //cv::namedWindow( "RGB", cv::WINDOW_AUTOSIZE );   // Create a window for display.
+            //cv::imshow( "RGB", image );                      // Show our image inside it.
+            //cv::waitKey(1);                                  // Wait for a keystroke in the window
             
-            wait(40); //25 Target FPS
+            //wait(20); //25 Target FPS
         }
 
         ROS_INFO_STREAM("Done");
@@ -976,24 +874,41 @@ int main (int argc, char** argv)
 
     ros::Rate loop_rate(20); //50 Hz
 
-    //ROS Interface
+
     ros::NodeHandle nh;
     ros::Subscriber sub1 = nh.subscribe(camera_point_topic, 1, callbackDepthPoints);
 
     image_transport::ImageTransport it(nh);
-    pub_image = it.advertise("tms/color_image", 1);
-    pub_cloud = nh.advertise<sensor_msgs::PointCloud2>("camera/depth_registered/points", 1);
+    pub_image = it.advertise("/tms/color_image", 1);
+    pub_info = nh.advertise<sensor_msgs::CameraInfo>("/tms/camera_info", 1);
+    pub_cloud = nh.advertise<sensor_msgs::PointCloud2>("/tms/depth_registered/points", 1);
 
-    //Main Logic
+//    ros::Publisher display_publisher = nh.advertise<moveit_msgs::DisplayTrajectory>("/move_group/display_planned_path", 1, true);
+//    moveit_msgs::DisplayTrajectory display_trajectory;
+
+//    ROS_INFO("Reference frame: %s", group.getPlanningFrame().c_str());
+//    ROS_INFO("Reference frame: %s", group.getEndEffectorLink().c_str());
+
+//    geometry_msgs::Pose target_pose1;
+//    target_pose1.orientation.w = 1.0;
+//    target_pose1.position.x = 0.28;
+//    target_pose1.position.y = -0.7;
+//    target_pose1.position.z = 1.0;
+//    group.setPoseTarget(target_pose1);
+
+//    moveit::planning_interface::MoveGroup::Plan my_plan;
+//    bool success = group.plan(my_plan);
+
+    //ROS_INFO("Visualizing plan 1 (pose goal) %s",success?"":"FAILED");
+
+
     boost::thread thread_logic1(&mainLogic);
 
-    //Play Benchmark datas
+
     boost::thread thread_logic2(&benchmarkLogic);
 
-    //Play KUKA logic
-    boost::thread thread_logic3(&kukaLogic);
 
-    cv::namedWindow( "RGB", cv::WINDOW_AUTOSIZE );   // Create a window for display.
+    boost::thread thread_logic3(&kukaLogic);
 
     while (ros::ok())
     {
